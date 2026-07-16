@@ -1,0 +1,3559 @@
+{
+  "name": "My workflow 2",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "id": "6698ed96-e15a-4545-9d63-82ecb2d579d9",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1jHwEP85kulJWaUJPKOoq-_Np_jjNMRYZJg40cdHlPVg",
+          "mode": "list",
+          "cachedResultName": "ACR_Commercial_Banking_Feedback_Source n8n",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jHwEP85kulJWaUJPKOoq-_Np_jjNMRYZJg40cdHlPVg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1240320847,
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jHwEP85kulJWaUJPKOoq-_Np_jjNMRYZJg40cdHlPVg/edit#gid=1240320847"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        96
+      ],
+      "id": "69318d4a-e7ff-42aa-bb0b-68c28a15c804",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "a7OJ734lJcr6Art3",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.Raw_Text }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a classification and routing engine for a bank's commercial onboarding feedback pipeline. You do NOT solve the customer's problem or give troubleshooting advice. Your only job is to classify each incoming ticket.\n\nYou will receive a JSON object with these fields: Feedback_ID, User_Segment, Source_Channel, Raw_Text.\n\nInstructions:\n1. Use the User_Segment value exactly as given — do not re-derive or guess it.\n2. Extract the entity name from the bracketed prefix at the start of Raw_Text (e.g., \"[Alpha FinTech]\" → entity: \"Alpha FinTech\").\n3. Classify the underlying issue into exactly one category: AML-Compliance, Tech-Infrastructure, UI-UX, or Process-Friction.\n4. Determine priority (P1/P2/P3) based on segment and severity: Enterprise = P1 for blocking issues, Mid-Market = P1/P2, SME = P2/P3. Non-blocking issues are never P1 regardless of segment.\n5. Set blocking to true only if the issue fully prevents onboarding from proceeding, false if it's friction/annoyance that still allows progress.\n6. Write a one-sentence issue_summary in plain language.\n7. Write a one-sentence recommended_action naming which team should handle it (AML/KYC Ops, Platform/Engineering, Product/Design, or RM Enablement).\n\nReturn only the classification. Never generate solutions, code fixes, or troubleshooting steps for the customer's issue itself.\n\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        448,
+        96
+      ],
+      "id": "69e5da97-a21f-4f4b-a7ab-fa9ff30bf1df",
+      "name": "AI Agent",
+      "alwaysOutputData": true,
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        464,
+        320
+      ],
+      "id": "9f529b50-2cca-46ce-8eed-393be771325a",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "72131a0e-0514-4b5c-9ac0-6facc88f26aa",
+              "leftValue": "={{ $json.output.category }}",
+              "rightValue": "AML-Compliance",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        800,
+        96
+      ],
+      "id": "66cc6161-387e-4cf2-b8cc-77cdcbfd34de",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dynamic SLA threshold evaluation for AML/Compliance Stalls\nconst slaConfig = {\n  'Enterprise / Large Corporate': { warning: 12, critical: 24, priority: 'P1' },\n  'Mid-Market Corporate':        { warning: 24, critical: 48, priority: 'P2' },\n  'SME / Small Business':        { warning: 36, critical: 72, priority: 'P3' }\n};\n\nreturn items.map(item => {\n  const incomingData = item.json;\n  \n  // Safely fallback if a segment doesn't match perfectly\n  const cfg = slaConfig[incomingData.User_Segment] || slaConfig['Mid-Market Corporate'];\n  \n  // Use the hours tracking field from your Google Sheet data\n  // (Adjust 'hours_since_update' if your sheet column name is slightly different)\n  const hoursStalled = incomingData.hours_since_update || 0; \n  \n  let dynamicAction = 'none';\n  if (hoursStalled >= cfg.critical) {\n    dynamicAction = 'escalated'; // This marks the node state as 'escalated' per your goals!\n  } else if (hoursStalled >= cfg.warning) {\n    dynamicAction = 'warning';\n  }\n\n  return {\n    json: {\n      ...incomingData,\n      warning_threshold_hours: cfg.warning,\n      critical_threshold_hours: cfg.critical,\n      calculated_priority: cfg.priority,\n      status: dynamicAction\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        -96
+      ],
+      "id": "dc59e40d-4870-4c09-b204-d9e4e0a411e0",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4865614b-59af-41e2-bcca-8cded5a211ff",
+              "leftValue": "={{ $json.output.category }}",
+              "rightValue": "Tech-Infrastructure",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1024,
+        192
+      ],
+      "id": "50b97261-4cb9-4961-a7ae-779431dce520",
+      "name": "If1",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "const priorityMap = {\n  'Enterprise / Large Corporate': 'P1',\n  'Mid-Market Corporate': 'P1',\n  'SME / Small Business': 'P2'\n};\nreturn $input.all().map(item => {\n  const j = item.json;\n  // If the row text indicates a timeout, tag it for escalation\n  const escalate = true; \n  return { json: { ...j, priority: priorityMap[j.User_Segment] || 'P2', escalate } };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        96
+      ],
+      "id": "78f57b5b-a700-49c2-8613-43aeb87320e9",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) {\n  // Extract user segments cleanly for fallback stability\n  const segment = item.json.User_Segment || 'SME / Small Business';\n\n  // Format a clean, production-ready internal CRM support payload\n  item.json.output = {\n    entity: item.json.Feedback_ID || 'GEN-UNC',\n    segment: segment,\n    category: \"General Service / Onboarding Stall\",\n    priority: \"P3\",\n    issue_summary: item.json.Raw_Text || \"No raw text provided\",\n    recommended_action: item.json.output || \"No remediation text provided\"\n  };\n\n  item.json.calculated_priority = \"P3\";\n  item.json.status = \"none\";\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        288
+      ],
+      "id": "9f879582-8f9a-441b-af07-75438914ccce",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1dcfuRXtSSerKxH0ztkwS7_3M_vUBxAHRApacqLm4d6o",
+          "mode": "list",
+          "cachedResultName": "General Support Tickets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1dcfuRXtSSerKxH0ztkwS7_3M_vUBxAHRApacqLm4d6o/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1dcfuRXtSSerKxH0ztkwS7_3M_vUBxAHRApacqLm4d6o/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "case_type": "= {{ $json.output.category }}",
+            "priority": "={{ $json.calculated_priority }}",
+            "summary": "={{ $json.output.issue_summary }}",
+            "ai_remediation_summary": "={{ $json.output.recommended_action }}",
+            "entity": "={{ $json.output.entity }}",
+            "segment": "={{ $json.output.segment }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ticket_id",
+              "displayName": "ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "case_type",
+              "displayName": "case_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "priority",
+              "displayName": "priority",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "assignment_group",
+              "displayName": "assignment_group",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_remediation_summary",
+              "displayName": "ai_remediation_summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "entity",
+              "displayName": "entity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "segment",
+              "displayName": "segment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1696,
+        96
+      ],
+      "id": "a9998358-797b-4338-9da8-c7380bccd9ed",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "a7OJ734lJcr6Art3",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1472,
+        80
+      ],
+      "id": "bb05069c-7282-44c4-b39c-9cc812663a6b",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"entity\": { \"type\": \"string\", \"description\": \"The corporate client name mentioned in the feedback\" },\n    \"segment\": { \"type\": \"string\", \"enum\": [\"Enterprise / Large Corporate\", \"Mid-Market Corporate\", \"SME / Small Business\"] },\n    \"category\": { \"type\": \"string\", \"enum\": [\"AML-Compliance\", \"Tech-Infrastructure\", \"UI-UX\", \"Process-Friction\"] },\n    \"priority\": { \"type\": \"string\", \"enum\": [\"P1\", \"P2\", \"P3\"] },\n    \"blocking\": { \"type\": \"boolean\", \"description\": \"True if this issue fully prevents onboarding progress, false if it's friction/annoyance\" },\n    \"issue_summary\": { \"type\": \"string\", \"description\": \"One-sentence plain-language summary of the problem\" },\n    \"recommended_action\": { \"type\": \"string\", \"description\": \"One-sentence routing recommendation naming which team should handle it\" }\n  },\n  \"required\": [\"entity\", \"segment\", \"category\", \"priority\", \"blocking\", \"issue_summary\", \"recommended_action\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        592,
+        320
+      ],
+      "id": "082ba47d-c4b3-4687-9323-30b96e0082bd",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2a08bbcd-8056-4dba-b29d-ec5b974deb75",
+              "leftValue": "={{ $json.priority.trim() }}",
+              "rightValue": "P3",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1920,
+        96
+      ],
+      "id": "1cf2ae29-1df2-4624-b4f3-4197f57fac01",
+      "name": "If2"
+    },
+    {
+      "parameters": {
+        "sendTo": "alangeoffrey94@gmail.com",
+        "subject": "=🚨 Escalation Digest — {{ $json.count }} P1/P2 Cases",
+        "message": "={{ $json.emailBody }}      ",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2368,
+        0
+      ],
+      "id": "c19b24e0-47a7-4021-bf6a-ee0eef568592",
+      "name": "Send a message",
+      "webhookId": "00bacc99-7d05-4610-aca5-f05f040784f4",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "EQIjiuO4KOIAuyOQ",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2144,
+        192
+      ],
+      "id": "8abc10cc-8c56-4956-ba03-6748f1b40922",
+      "name": "No Operation, do nothing"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "141cedd5-0fe4-48bc-9251-243a1d991fef",
+      "name": "Schedule Trigger",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst rows = items.map(i => i.json);\n\nrows.forEach(d => {\n  d.simulated_age_hours = Math.floor(Math.random() * 60) + 1;\n  const warning = d.warning_threshold_hours || 24;\n  const critical = d.critical_threshold_hours || 48;\n  d.sla_status = d.simulated_age_hours >= critical ? \"🔴 CRITICAL - Breach imminent\"\n               : d.simulated_age_hours >= warning ? \"🟠 WARNING - Approaching deadline\"\n               : \"🟢 On track\";\n});\n\nconst p1 = rows.filter(d => (d.case_type || '').trim() === 'AML-Compliance');\nconst p2 = rows.filter(d => (d.case_type || '').trim() === 'Tech-Infrastructure');\n\nfunction buildRows(list, color) {\n  return list.map(d => `\n    <tr>\n      <td style=\"padding:6px; border:1px solid #eee;\">${d.entity || ''}</td>\n      <td style=\"padding:6px; border:1px solid #eee;\">${d.segment || ''}</td>\n      <td style=\"padding:6px; border:1px solid #eee;\">${d.summary || ''}</td>\n      <td style=\"padding:6px; border:1px solid #eee; font-weight:bold; color:${color};\">${d.ai_remediation_summary || ''}</td>\n        <td style=\"padding:6px; border:1px solid #eee;\">${d.simulated_age_hours}h — ${d.sla_status}</td>\n      </tr>`).join('');;\n}\n\nlet emailBody = `\n<div style=\"font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto;\">\n  <div style=\"background:#b71c1c; color:#fff; padding:16px 20px; border-radius:6px 6px 0 0;\">\n    <h2 style=\"margin:0;\">🚨 Client Feedback Escalation Digest</h2>\n    <p style=\"margin:4px 0 0; font-size:14px;\">Automated alert — ${rows.length} case(s) require action</p>\n  </div>\n  <div style=\"border:1px solid #ddd; border-top:none; padding:20px;\">\n`;\n\nif (p1.length > 0) {\n  emailBody += `\n    <div style=\"margin-bottom:24px;\">\n      <h3 style=\"color:#b71c1c; border-bottom:2px solid #b71c1c; padding-bottom:6px;\">\n        🔴 P1 — AML/KYC Compliance (${p1.length} case${p1.length > 1 ? 's' : ''})\n      </h3>\n      <p style=\"font-size:13px; color:#444;\">\n        These cases carry direct regulatory and customer-trust risk. Unresolved AML/KYC verification failures can escalate to compliance breaches and client attrition. <b>Immediate action requested from AML/KYC Ops.</b>\n      </p>\n      <table style=\"width:100%; border-collapse:collapse; font-size:13px;\">\n        <tr style=\"background:#fbe9e7;\">\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Entity</th>\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Segment</th>\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Issue</th>\n<th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Recommended Action</th>\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">SLA Status</th>\n        </tr>\n        ${buildRows(p1, '#b71c1c')}\n      </table>\n    </div>`;\n}\n\nif (p2.length > 0) {\n  emailBody += `\n    <div style=\"margin-bottom:12px;\">\n      <h3 style=\"color:#e65100; border-bottom:2px solid #e65100; padding-bottom:6px;\">\n        🟠 P2 — Technical Infrastructure (${p2.length} case${p2.length > 1 ? 's' : ''})\n      </h3>\n      <p style=\"font-size:13px; color:#444;\">\n        API/webhook timeout and system reliability issues are directly disrupting client workflows. <b>Route to DevOps/Tech Support for immediate remediation</b> to prevent further client drop-off.\n      </p>\n      <table style=\"width:100%; border-collapse:collapse; font-size:13px;\">\n        <tr style=\"background:#fff3e0;\">\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Entity</th>\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Segment</th>\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Issue</th>\n <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">Recommended Action</th>\n          <th style=\"text-align:left; padding:6px; border:1px solid #eee;\">SLA Status</th>\n        </tr>\n        ${buildRows(p2, '#e65100')}\n      </table>\n    </div>`;\n}\n\nemailBody += `\n    <p style=\"font-size:12px; color:#888; border-top:1px solid #eee; padding-top:12px; margin-top:20px;\">\n      Generated automatically by the ACR (Ask–Check–Recommend) escalation engine. This digest reflects real-time classification of client feedback to minimize resolution delay and reduce customer churn risk.\n    </p>\n  </div>\n</div>`;\n\nreturn [{\n  json: {\n    count: rows.length,\n    digest: rows,\n    emailBody: emailBody\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        0
+      ],
+      "id": "a5e5636e-b04b-4474-9f0a-2511ee38b343",
+      "name": "Code in JavaScript3"
+    }
+  ],
+  "pinData": {
+    "AI Agent": [
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Document upload via SFTP failed due to an encryption error, blocking onboarding progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The LEI verification is failing even though it shows as active on the GLEIF website.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 1
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "There is a timeout issue with the API webhook that prevents pulling company background data from the MCA portal.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 2
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The corporate KYC portal encountered a 500 error when attempting to upload large audited financial PDFs.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 3
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "SME / Small Business",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "There is a timeout issue when pulling company background data from the MCA portal via API webhook.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 4
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Mid-Market Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The Relationship Manager requested the same documents again despite them being uploaded.",
+            "recommended_action": "Product/Design team should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 5
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The Corporate KYC portal encountered a 500 error when attempting to upload large financial PDFs, preventing onboarding.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 6
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The multi-jurisdictional tax form does not fit our holding company structure.",
+            "recommended_action": "Product/Design team should investigate the tax form's design."
+          }
+        },
+        "pairedItem": {
+          "item": 7
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The onboarding process took significantly longer than expected, which caused frustration.",
+            "recommended_action": "RM Enablement"
+          }
+        },
+        "pairedItem": {
+          "item": 8
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The signatory text boxes are cutting off longer corporate names on small screens.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 9
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The onboarding process took 2 weeks instead of the promised 48 hours, indicating slow progress.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 10
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The error messages received during KYC are unclear and do not indicate what information is missing.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 11
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The SFTP document upload failed due to an encryption error, preventing progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 12
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Director verification failed due to a mismatch between the legal name and corporate tax records.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 13
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The mandatory 'Submit Documents' button is hidden in dark mode on the mobile app dashboard.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 14
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The form auto-saves intermittently without showing a confirmation status indicator.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 15
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The multi-jurisdictional tax form doesn't accommodate the holding company structure.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 16
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "LEI verification is failing despite the entity's active status on the GLEIF website.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 17
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The dual-authorization workflow failed because the secondary approver did not receive the push notification.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 18
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Cross-border onboarding is stalled at the AML check stage for 4 days without any status update.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 19
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Quantum Tech Solutions",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "Customer care lacks visibility into the digital onboarding workflow status, leading to a disconnected experience.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 20
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "LEI verification is failing despite the entity having an active status on the GLEIF website.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 21
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The automated chatbot does not effectively assist corporate entities with complex structures.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 22
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The cross-border entity onboarding is stalled at the AML check stage for 4 days with no status update.",
+            "recommended_action": "AML/KYC Ops should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 23
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Quantum Tech Solutions",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The Corporate KYC portal encountered a 500 error when attempting to upload large audited financial PDFs.",
+            "recommended_action": "Platform/Engineering should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 24
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": true,
+            "issue_summary": "The biometric login feature on the corporate mobile app is stuck in a loop on iOS 16.5, preventing users from logging in.",
+            "recommended_action": "Platform/Engineering should investigate and resolve this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 25
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Vertex Logistics",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The error message 'Error Code XYZ-99' is confusing and doesn't clarify what is missing in KYC.",
+            "recommended_action": "Platform/Engineering should address this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 26
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The form auto-saves intermittently but does not display a 'Saved' confirmation status indicator.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 27
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The Relationship Manager requested the same PAN and Board Resolution documents twice despite them being uploaded on the portal.",
+            "recommended_action": "RM Enablement"
+          }
+        },
+        "pairedItem": {
+          "item": 28
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Cross-border onboarding is stalled for 4 days during the AML check with no status updates.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 29
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The multi-jurisdictional tax form does not accommodate the holding company structure.",
+            "recommended_action": "Platform/Engineering should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 30
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "There is an API webhook timeout preventing the retrieval of company background data.",
+            "recommended_action": "Platform/Engineering should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 31
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The dual-authorization workflow failed because the secondary approver did not receive the push notification.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 32
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Onboarding is stalled at the AML check stage for 4 days without status updates.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 33
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Quantum Tech Solutions",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "There is a timeout issue with the API webhook while pulling company background data.",
+            "recommended_action": "Platform/Engineering should handle this."
+          }
+        },
+        "pairedItem": {
+          "item": 34
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The UBO declaration process crashes at layer 3, preventing progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 35
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "LEI verification is failing despite the identifier being active on the GLEIF website.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 36
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The automated chatbot is ineffective for corporate entities with complex structures.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 37
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Director verification failed due to an exact mismatch between the legal name and corporate tax records.",
+            "recommended_action": "AML/KYC Ops should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 38
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Cross-border entity onboarding is stalled at the AML check stage for 4 days without any status update.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 39
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The corporate KYC portal threw a 500 error when uploading large audited financial PDFs, preventing onboarding progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 40
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "There is a timeout issue with the API webhook when attempting to pull company background data from the MCA portal.",
+            "recommended_action": "Platform/Engineering should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 41
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Quantum Tech Solutions",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The onboarding process is stalled at the AML check stage for 4 days without any status update.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 42
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The Relationship Manager requested duplicate documents that were already uploaded on the portal.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 43
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The OIDC/OAuth token expired during corporate registry verification, causing a form restart.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 44
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Vertex Logistics",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "Customer care lacks visibility into the digital onboarding workflow status, leading to a disconnected experience.",
+            "recommended_action": "Product/Design team should address the visibility issues."
+          }
+        },
+        "pairedItem": {
+          "item": 45
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The biometric login on the corporate mobile app is stuck in a loop on iOS 16.5, preventing access.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 46
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The multi-jurisdictional tax form does not fit our holding company structure.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 47
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The UBO declaration process crashes on layer 3, preventing further documentation submission.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 48
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The automated chatbot does not effectively assist corporate clients with complex structures.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 49
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The OIDC/OAuth token expired during corporate registry verification, requiring a form restart.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 50
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Mid-Market Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "Customer care lacks visibility into the digital onboarding workflow status, resulting in a disconnected experience.",
+            "recommended_action": "Product/Design should address the visibility and experience issues."
+          }
+        },
+        "pairedItem": {
+          "item": 51
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Vertex Logistics",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The compliance team rejected the authorized signatory board resolution template provided by the bank.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 52
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The onboarding modules lack training documentation or tooltips.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 53
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The Relationship Manager requested the same documentation multiple times despite it being uploaded already.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 54
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Vertex Logistics",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The API webhook is timing out while trying to pull company background data.",
+            "recommended_action": "Platform/Engineering should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 55
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The OIDC/OAuth token expired during corporate registry verification, causing a need to restart the form.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 56
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Director verification failed due to a mismatch with the legal name in corporate tax records.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 57
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The SFTP document upload failed due to an encryption error, preventing onboarding progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 58
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Vertex Logistics",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Onboarding for the cross-border entity is stalled at the AML check stage for 4 days with no updates.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 59
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The automated chatbot is ineffective for complex corporate structures.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 60
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The dark mode feature hides the mandatory 'Submit Documents' button on the mobile app dashboard.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 61
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The dropdown menu for selecting industrial classification codes is not searchable, making it difficult to navigate through 200 items.",
+            "recommended_action": "Product/Design."
+          }
+        },
+        "pairedItem": {
+          "item": 62
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The automated chatbot does not meet the needs of corporate entities with complex structures.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 63
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Cross-border entity onboarding is stalled at the AML check stage for 4 days without any status update.",
+            "recommended_action": "AML/KYC Ops should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 64
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The Corporate KYC portal is generating a 500 error when attempting to upload 50MB financial PDFs.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 65
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The automated chatbot does not effectively assist corporate entities with complex structures.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 66
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The SFTP document upload failed due to an encryption error preventing further progress.",
+            "recommended_action": "Platform/Engineering should address this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 67
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The system crashes while trying to submit the UBO declaration at layer 3, preventing completion.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 68
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The UBO declaration process crashes on the third layer, preventing further progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 69
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "SME / Small Business",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The dark mode feature is causing the mandatory 'Submit Documents' button to be hidden on the mobile app dashboard.",
+            "recommended_action": "Product/Design should address this UI issue."
+          }
+        },
+        "pairedItem": {
+          "item": 70
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The signatory text boxes are cutting off longer corporate names on small screens.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 71
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Vertex Logistics",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The signatory text boxes are cutting off longer corporate names on small screens.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 72
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The dark mode setting on the mobile app hides the mandatory 'Submit Documents' button.",
+            "recommended_action": "Product/Design team should address this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 73
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The OIDC/OAuth token expired during corporate registry verification, requiring a form restart.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 74
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Quantum Tech Solutions",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The dual-authorization workflow failed because the secondary approver did not receive a notification, blocking progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 75
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The dual-authorization workflow failed because the secondary approver did not receive the necessary notification.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 76
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "LEI verification is failing despite its active status on the GLEIF website.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 77
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "Confusing error messages related to KYC are unclear and unhelpful.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 78
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Quantum Tech Solutions",
+            "segment": "Mid-Market Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The multi-jurisdictional tax form does not accommodate our holding company structure.",
+            "recommended_action": "Product/Design team should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 79
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "LEI verification is failing despite the active status on the GLEIF website.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 80
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The mobile app's dark mode hides the mandatory 'Submit Documents' button.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 81
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Mid-Market Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The Relationship Manager requested the same documents that were already uploaded to the portal twice.",
+            "recommended_action": "RM Enablement"
+          }
+        },
+        "pairedItem": {
+          "item": 82
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "SME / Small Business",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The dark mode on the mobile app dashboard hides the mandatory 'Submit Documents' button.",
+            "recommended_action": "Product/Design team should address this UI issue."
+          }
+        },
+        "pairedItem": {
+          "item": 83
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "Training documentation or tooltips for onboarding modules are completely missing.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 84
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The form auto-saves but lacks a confirmation indicator for users.",
+            "recommended_action": "Product/Design should address this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 85
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The signatory text boxes are cutting off longer corporate names on small screens.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 86
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Enterprise / Large Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The signatory text boxes are cutting off longer corporate names on small screens.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 87
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The form auto-saves intermittently without showing a 'Saved' confirmation status indicator.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 88
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "Biometric login on the corporate mobile app is looping on iOS 16.5.",
+            "recommended_action": "Platform/Engineering should investigate and resolve this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 89
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "SME / Small Business",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The onboarding process took 2 weeks instead of the promised 48 hours, causing frustration.",
+            "recommended_action": "RM Enablement"
+          }
+        },
+        "pairedItem": {
+          "item": 90
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Omega Healthcare",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The SFTP document upload has failed due to an encryption error, preventing progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 91
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The SFTP document upload failed due to an encryption error, preventing further onboarding progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 92
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "Training documentation or tooltips for onboarding modules are completely missing.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 93
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Titan Infrastructure",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The multi-jurisdictional tax form does not accommodate the holding company structure.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 94
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "AML-Compliance",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Cross-border entity onboarding is stalled at the AML check stage without any updates for 4 days.",
+            "recommended_action": "AML/KYC Ops"
+          }
+        },
+        "pairedItem": {
+          "item": 95
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Alpha FinTech",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The dual-authorization workflow failed as the secondary approver did not receive the necessary push notification.",
+            "recommended_action": "Platform/Engineering should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 96
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Zeta Consulting",
+            "segment": "Mid-Market Corporate",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The dropdown menu for selecting industrial classification codes is not searchable, making it difficult to find specific items among 200 options.",
+            "recommended_action": "Product/Design should handle this issue."
+          }
+        },
+        "pairedItem": {
+          "item": 97
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Nexus Trading LLC",
+            "segment": "Mid-Market Corporate",
+            "category": "Process-Friction",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The Relationship Manager requested the same PAN and Board Resolution documents twice despite them being uploaded on the portal.",
+            "recommended_action": "Product/Design should address the document upload visibility issue."
+          }
+        },
+        "pairedItem": {
+          "item": 98
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "Apex Manufacturing",
+            "segment": "SME / Small Business",
+            "category": "UI-UX",
+            "priority": "P2",
+            "blocking": false,
+            "issue_summary": "The signatory text boxes are not displaying longer corporate names properly on small screens.",
+            "recommended_action": "Product/Design"
+          }
+        },
+        "pairedItem": {
+          "item": 99
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "MCA portal",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "Client onboarding is blocked due to a critical failure while fetching corporate registry data from the MCA portal.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 100
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "MCA_Portal_Company_Lookup",
+            "segment": "Mid-Market Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P2",
+            "blocking": true,
+            "issue_summary": "There is a gateway error causing a failure during the background check step.",
+            "recommended_action": "Platform/Engineering should investigate the API gateway issues."
+          }
+        },
+        "pairedItem": {
+          "item": 101
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "client",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The client experienced a system timeout during the document upload sequence via the SFTP portal, preventing onboarding progress.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 102
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "MCA",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "The MCA verification endpoint is not responding within the specified timeframe, causing a connection drop.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 103
+        }
+      },
+      {
+        "json": {
+          "output": {
+            "entity": "corporate validation layer",
+            "segment": "Enterprise / Large Corporate",
+            "category": "Tech-Infrastructure",
+            "priority": "P1",
+            "blocking": true,
+            "issue_summary": "An API error response from the corporate validation layer is halting onboarding initialization.",
+            "recommended_action": "Platform/Engineering"
+          }
+        },
+        "pairedItem": {
+          "item": 104
+        }
+      }
+    ],
+    "Get row(s) in sheet": [
+      {
+        "json": {
+          "row_number": 2,
+          "Feedback_ID": "ACR-CB-001",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Alpha FinTech] SFTP document upload failed with an encryption error. No specific logs provided."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 3,
+          "Feedback_ID": "ACR-CB-002",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Nexus Trading LLC] LEI (Legal Entity Identifier) verification failing despite active status on GLEIF website."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 4,
+          "Feedback_ID": "ACR-CB-003",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Titan Infrastructure] API webhook timeout while pulling company background data from MCA portal."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 5,
+          "Feedback_ID": "ACR-CB-004",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Apex Manufacturing] Corporate KYC portal threw a 500 error when uploading 50MB audited financial PDFs."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 6,
+          "Feedback_ID": "ACR-CB-005",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Apex Manufacturing] API webhook timeout while pulling company background data from MCA portal."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 7,
+          "Feedback_ID": "ACR-CB-006",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Zeta Consulting] Relationship Manager asked for the same PAN and Board Resolution documents we uploaded on the portal twice."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 8,
+          "Feedback_ID": "ACR-CB-007",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Titan Infrastructure] Corporate KYC portal threw a 500 error when uploading 50MB audited financial PDFs."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 9,
+          "Feedback_ID": "ACR-CB-008",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Omega Healthcare] The multi-jurisdictional tax form doesn't accommodate our holding company structure."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 10,
+          "Feedback_ID": "ACR-CB-009",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Omega Healthcare] The onboarding process took 2 weeks instead of the promised 48 hours. Too slow."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 11,
+          "Feedback_ID": "ACR-CB-010",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Zeta Consulting] The signatory text boxes are cutting off longer corporate names on small screens."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 12,
+          "Feedback_ID": "ACR-CB-011",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Alpha FinTech] The onboarding process took 2 weeks instead of the promised 48 hours. Too slow."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 13,
+          "Feedback_ID": "ACR-CB-012",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Apex Manufacturing] Confusing error messages: 'Error Code XYZ-99' doesn't help us know what's missing in KYC."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 14,
+          "Feedback_ID": "ACR-CB-013",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Apex Manufacturing] SFTP document upload failed with an encryption error. No specific logs provided."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 15,
+          "Feedback_ID": "ACR-CB-014",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Titan Infrastructure] Director verification failed because legal name didn't match exactly with corporate tax records."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 16,
+          "Feedback_ID": "ACR-CB-015",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Omega Healthcare] Dark mode hides the mandatory 'Submit Documents' button on the mobile app dashboard."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 17,
+          "Feedback_ID": "ACR-CB-016",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Nexus Trading LLC] Form auto-saves intermittently but doesn't show a 'Saved' confirmation status indicator."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 18,
+          "Feedback_ID": "ACR-CB-017",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Zeta Consulting] The multi-jurisdictional tax form doesn't accommodate our holding company structure."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 19,
+          "Feedback_ID": "ACR-CB-018",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Omega Healthcare] LEI (Legal Entity Identifier) verification failing despite active status on GLEIF website."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 20,
+          "Feedback_ID": "ACR-CB-019",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Titan Infrastructure] Dual-authorization workflow failed; the secondary approver never received the push notification."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 21,
+          "Feedback_ID": "ACR-CB-020",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Omega Healthcare] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 22,
+          "Feedback_ID": "ACR-CB-021",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Quantum Tech Solutions] Customer care has no visibility into the digital onboarding workflow status. Disconnected experience."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 23,
+          "Feedback_ID": "ACR-CB-022",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Alpha FinTech] LEI (Legal Entity Identifier) verification failing despite active status on GLEIF website."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 24,
+          "Feedback_ID": "ACR-CB-023",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Titan Infrastructure] Decent interface, but your automated chatbot is useless for corporate entities with complex structures."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 25,
+          "Feedback_ID": "ACR-CB-024",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Zeta Consulting] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 26,
+          "Feedback_ID": "ACR-CB-025",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Quantum Tech Solutions] Corporate KYC portal threw a 500 error when uploading 50MB audited financial PDFs."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 27,
+          "Feedback_ID": "ACR-CB-026",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Titan Infrastructure] Biometric login on the corporate mobile app keeps looping on iOS 16.5."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 28,
+          "Feedback_ID": "ACR-CB-027",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Vertex Logistics] Confusing error messages: 'Error Code XYZ-99' doesn't help us know what's missing in KYC."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 29,
+          "Feedback_ID": "ACR-CB-028",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Omega Healthcare] Form auto-saves intermittently but doesn't show a 'Saved' confirmation status indicator."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 30,
+          "Feedback_ID": "ACR-CB-029",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Zeta Consulting] Relationship Manager asked for the same PAN and Board Resolution documents we uploaded on the portal twice."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 31,
+          "Feedback_ID": "ACR-CB-030",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Nexus Trading LLC] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 32,
+          "Feedback_ID": "ACR-CB-031",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Omega Healthcare] The multi-jurisdictional tax form doesn't accommodate our holding company structure."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 33,
+          "Feedback_ID": "ACR-CB-032",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Omega Healthcare] API webhook timeout while pulling company background data from MCA portal."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 34,
+          "Feedback_ID": "ACR-CB-033",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Alpha FinTech] Dual-authorization workflow failed; the secondary approver never received the push notification."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 35,
+          "Feedback_ID": "ACR-CB-034",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Nexus Trading LLC] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 36,
+          "Feedback_ID": "ACR-CB-035",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Quantum Tech Solutions] API webhook timeout while pulling company background data from MCA portal."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 37,
+          "Feedback_ID": "ACR-CB-036",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Titan Infrastructure] UBO (Ultimate Beneficial Owner) declaration requires 4 layers of documentation but page crashes on layer 3."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 38,
+          "Feedback_ID": "ACR-CB-037",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Alpha FinTech] LEI (Legal Entity Identifier) verification failing despite active status on GLEIF website."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 39,
+          "Feedback_ID": "ACR-CB-038",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Zeta Consulting] Decent interface, but your automated chatbot is useless for corporate entities with complex structures."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 40,
+          "Feedback_ID": "ACR-CB-039",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Omega Healthcare] Director verification failed because legal name didn't match exactly with corporate tax records."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 41,
+          "Feedback_ID": "ACR-CB-040",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Apex Manufacturing] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 42,
+          "Feedback_ID": "ACR-CB-041",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Nexus Trading LLC] Corporate KYC portal threw a 500 error when uploading 50MB audited financial PDFs."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 43,
+          "Feedback_ID": "ACR-CB-042",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Apex Manufacturing] API webhook timeout while pulling company background data from MCA portal."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 44,
+          "Feedback_ID": "ACR-CB-043",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Quantum Tech Solutions] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 45,
+          "Feedback_ID": "ACR-CB-044",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Zeta Consulting] Relationship Manager asked for the same PAN and Board Resolution documents we uploaded on the portal twice."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 46,
+          "Feedback_ID": "ACR-CB-045",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Titan Infrastructure] OIDC / OAuth token expired during corporate registry verification. Had to restart form."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 47,
+          "Feedback_ID": "ACR-CB-046",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Vertex Logistics] Customer care has no visibility into the digital onboarding workflow status. Disconnected experience."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 48,
+          "Feedback_ID": "ACR-CB-047",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Omega Healthcare] Biometric login on the corporate mobile app keeps looping on iOS 16.5."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 49,
+          "Feedback_ID": "ACR-CB-048",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Zeta Consulting] The multi-jurisdictional tax form doesn't accommodate our holding company structure."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 50,
+          "Feedback_ID": "ACR-CB-049",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Zeta Consulting] UBO (Ultimate Beneficial Owner) declaration requires 4 layers of documentation but page crashes on layer 3."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 51,
+          "Feedback_ID": "ACR-CB-050",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Nexus Trading LLC] Decent interface, but your automated chatbot is useless for corporate entities with complex structures."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 52,
+          "Feedback_ID": "ACR-CB-051",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Apex Manufacturing] OIDC / OAuth token expired during corporate registry verification. Had to restart form."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 53,
+          "Feedback_ID": "ACR-CB-052",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Apex Manufacturing] Customer care has no visibility into the digital onboarding workflow status. Disconnected experience."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 54,
+          "Feedback_ID": "ACR-CB-053",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Vertex Logistics] Authorized signatory board resolution template provided by bank rejected by compliance team later."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 55,
+          "Feedback_ID": "ACR-CB-054",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Titan Infrastructure] Overall portal is decent but training documentation or tooltips for onboarding modules are completely missing."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 56,
+          "Feedback_ID": "ACR-CB-055",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Apex Manufacturing] Relationship Manager asked for the same PAN and Board Resolution documents we uploaded on the portal twice."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 57,
+          "Feedback_ID": "ACR-CB-056",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Vertex Logistics] API webhook timeout while pulling company background data from MCA portal."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 58,
+          "Feedback_ID": "ACR-CB-057",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Zeta Consulting] OIDC / OAuth token expired during corporate registry verification. Had to restart form."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 59,
+          "Feedback_ID": "ACR-CB-058",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Nexus Trading LLC] Director verification failed because legal name didn't match exactly with corporate tax records."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 60,
+          "Feedback_ID": "ACR-CB-059",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Apex Manufacturing] SFTP document upload failed with an encryption error. No specific logs provided."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 61,
+          "Feedback_ID": "ACR-CB-060",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Vertex Logistics] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 62,
+          "Feedback_ID": "ACR-CB-061",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Omega Healthcare] Decent interface, but your automated chatbot is useless for corporate entities with complex structures."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 63,
+          "Feedback_ID": "ACR-CB-062",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Alpha FinTech] Dark mode hides the mandatory 'Submit Documents' button on the mobile app dashboard."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 64,
+          "Feedback_ID": "ACR-CB-063",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Omega Healthcare] The dropdown menu for selecting industrial classification codes is not searchable. Hard to scroll through 200 items."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 65,
+          "Feedback_ID": "ACR-CB-064",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Nexus Trading LLC] Decent interface, but your automated chatbot is useless for corporate entities with complex structures."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 66,
+          "Feedback_ID": "ACR-CB-065",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Alpha FinTech] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 67,
+          "Feedback_ID": "ACR-CB-066",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Omega Healthcare] Corporate KYC portal threw a 500 error when uploading 50MB audited financial PDFs."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 68,
+          "Feedback_ID": "ACR-CB-067",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Alpha FinTech] Decent interface, but your automated chatbot is useless for corporate entities with complex structures."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 69,
+          "Feedback_ID": "ACR-CB-068",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Alpha FinTech] SFTP document upload failed with an encryption error. No specific logs provided."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 70,
+          "Feedback_ID": "ACR-CB-069",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Nexus Trading LLC] UBO (Ultimate Beneficial Owner) declaration requires 4 layers of documentation but page crashes on layer 3."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 71,
+          "Feedback_ID": "ACR-CB-070",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Alpha FinTech] UBO (Ultimate Beneficial Owner) declaration requires 4 layers of documentation but page crashes on layer 3."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 72,
+          "Feedback_ID": "ACR-CB-071",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Alpha FinTech] Dark mode hides the mandatory 'Submit Documents' button on the mobile app dashboard."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 73,
+          "Feedback_ID": "ACR-CB-072",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Nexus Trading LLC] The signatory text boxes are cutting off longer corporate names on small screens."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 74,
+          "Feedback_ID": "ACR-CB-073",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Vertex Logistics] The signatory text boxes are cutting off longer corporate names on small screens."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 75,
+          "Feedback_ID": "ACR-CB-074",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Zeta Consulting] Dark mode hides the mandatory 'Submit Documents' button on the mobile app dashboard."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 76,
+          "Feedback_ID": "ACR-CB-075",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Nexus Trading LLC] OIDC / OAuth token expired during corporate registry verification. Had to restart form."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 77,
+          "Feedback_ID": "ACR-CB-076",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Quantum Tech Solutions] Dual-authorization workflow failed; the secondary approver never received the push notification."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 78,
+          "Feedback_ID": "ACR-CB-077",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Omega Healthcare] Dual-authorization workflow failed; the secondary approver never received the push notification."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 79,
+          "Feedback_ID": "ACR-CB-078",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Apex Manufacturing] LEI (Legal Entity Identifier) verification failing despite active status on GLEIF website."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 80,
+          "Feedback_ID": "ACR-CB-079",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Titan Infrastructure] Confusing error messages: 'Error Code XYZ-99' doesn't help us know what's missing in KYC."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 81,
+          "Feedback_ID": "ACR-CB-080",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Quantum Tech Solutions] The multi-jurisdictional tax form doesn't accommodate our holding company structure."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 82,
+          "Feedback_ID": "ACR-CB-081",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Omega Healthcare] LEI (Legal Entity Identifier) verification failing despite active status on GLEIF website."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 83,
+          "Feedback_ID": "ACR-CB-082",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Nexus Trading LLC] Dark mode hides the mandatory 'Submit Documents' button on the mobile app dashboard."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 84,
+          "Feedback_ID": "ACR-CB-083",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Apex Manufacturing] Relationship Manager asked for the same PAN and Board Resolution documents we uploaded on the portal twice."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 85,
+          "Feedback_ID": "ACR-CB-084",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Apex Manufacturing] Dark mode hides the mandatory 'Submit Documents' button on the mobile app dashboard."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 86,
+          "Feedback_ID": "ACR-CB-085",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Alpha FinTech] Overall portal is decent but training documentation or tooltips for onboarding modules are completely missing."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 87,
+          "Feedback_ID": "ACR-CB-086",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Titan Infrastructure] Form auto-saves intermittently but doesn't show a 'Saved' confirmation status indicator."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 88,
+          "Feedback_ID": "ACR-CB-087",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Nexus Trading LLC] The signatory text boxes are cutting off longer corporate names on small screens."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 89,
+          "Feedback_ID": "ACR-CB-088",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Nexus Trading LLC] The signatory text boxes are cutting off longer corporate names on small screens."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 90,
+          "Feedback_ID": "ACR-CB-089",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Omega Healthcare] Form auto-saves intermittently but doesn't show a 'Saved' confirmation status indicator."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 91,
+          "Feedback_ID": "ACR-CB-090",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Apex Manufacturing] Biometric login on the corporate mobile app keeps looping on iOS 16.5."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 92,
+          "Feedback_ID": "ACR-CB-091",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Web Portal Portal",
+          "Raw_Text": "[Apex Manufacturing] The onboarding process took 2 weeks instead of the promised 48 hours. Too slow."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 93,
+          "Feedback_ID": "ACR-CB-092",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Omega Healthcare] SFTP document upload failed with an encryption error. No specific logs provided."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 94,
+          "Feedback_ID": "ACR-CB-093",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Alpha FinTech] SFTP document upload failed with an encryption error. No specific logs provided."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 95,
+          "Feedback_ID": "ACR-CB-094",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Titan Infrastructure] Overall portal is decent but training documentation or tooltips for onboarding modules are completely missing."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 96,
+          "Feedback_ID": "ACR-CB-095",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Relationship Manager",
+          "Raw_Text": "[Titan Infrastructure] The multi-jurisdictional tax form doesn't accommodate our holding company structure."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 97,
+          "Feedback_ID": "ACR-CB-096",
+          "User_Segment": "Enterprise / Large Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Alpha FinTech] Cross-border entity onboarding stalled at AML check stage for 4 days without any status update."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 98,
+          "Feedback_ID": "ACR-CB-097",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Alpha FinTech] Dual-authorization workflow failed; the secondary approver never received the push notification."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 99,
+          "Feedback_ID": "ACR-CB-098",
+          "User_Segment": "Mid-Market Corporate",
+          "Source_Channel": "Support Ticket",
+          "Raw_Text": "[Zeta Consulting] The dropdown menu for selecting industrial classification codes is not searchable. Hard to scroll through 200 items."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 100,
+          "Feedback_ID": "ACR-CB-099",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Mobile App",
+          "Raw_Text": "[Nexus Trading LLC] Relationship Manager asked for the same PAN and Board Resolution documents we uploaded on the portal twice."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "row_number": 101,
+          "Feedback_ID": "ACR-CB-100",
+          "User_Segment": "SME / Small Business",
+          "Source_Channel": "Live Chat",
+          "Raw_Text": "[Apex Manufacturing] The signatory text boxes are cutting off longer corporate names on small screens."
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "4d71e99f-b2a8-4179-933c-d8bf4891be3d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d815144482a7e6543286ba0bb89c0d04ca1eeaa210841a93a7cec56e40e3a185"
+  },
+  "nodeGroups": [],
+  "id": "17X0qxiGt0NC8kNg",
+  "tags": []
+}

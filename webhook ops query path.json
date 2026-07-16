@@ -1,0 +1,130 @@
+{
+  "name": "My workflow 3",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "ops-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        32,
+        0
+      ],
+      "id": "4a038a30-c8d9-4316-86ba-d8d61857409d",
+      "name": "Webhook",
+      "webhookId": "1768f792-edc9-4806-a19c-3bdd93786e8b"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1dcfuRXtSSerKxH0ztkwS7_3M_vUBxAHRApacqLm4d6o",
+          "mode": "list",
+          "cachedResultName": "General Support Tickets",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1dcfuRXtSSerKxH0ztkwS7_3M_vUBxAHRApacqLm4d6o/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1dcfuRXtSSerKxH0ztkwS7_3M_vUBxAHRApacqLm4d6o/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        208,
+        0
+      ],
+      "id": "f4c84e04-16cf-49bd-be15-adac4dd5dfe5",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "a7OJ734lJcr6Art3",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\n\nconst p1 = rows.filter(r => (r.case_type || '').trim() === 'AML-Compliance');\nconst p2 = rows.filter(r => (r.case_type || '').trim() === 'Tech-Infrastructure');\nconst p3 = rows.filter(r => (r.case_type || '').trim().startsWith('General Service'));\n\nreturn [{\n  json: {\n    total: rows.length,\n    p1_count: p1.length,\n    p2_count: p2.length,\n    p3_count: p3.length,\n    p1_cases: p1,\n    p2_cases: p2,\n    p3_cases: p3\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "5dfe3e54-e3e6-47ec-8ea5-1d59de781a27",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        624,
+        0
+      ],
+      "id": "78cc88b5-5565-40a1-a461-2bc356deba59",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "c58afcd7-d1e2-429a-bf31-d08d844b520d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d815144482a7e6543286ba0bb89c0d04ca1eeaa210841a93a7cec56e40e3a185"
+  },
+  "nodeGroups": [],
+  "id": "QI21bnJUYeXTOOSr",
+  "tags": []
+}
