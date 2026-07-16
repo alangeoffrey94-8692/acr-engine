@@ -1,0 +1,57 @@
+# The Complaint That Files Itself: Building a Self-Reporting Ops Engine for Banking
+
+A client complaint about a failed AML verification and a client complaint about a slow SFTP upload look almost identical in a shared inbox. They are not the same problem. One is a compliance clock. The other is an engineering ticket. Most ops teams still triage both the same way — a person reads, decides, forwards, and hopes the right team sees it before the client gives up.
+
+That gap between *"a client raised an issue"* and *"the right person is acting on it"* is where churn and compliance exposure actually live. I wanted to know if that gap could be closed automatically — not with more headcount, not with a new CRM, but with a small, focused loop of classification and action.
+
+**The result was the ACR Framework — Ask, Check, Recommend — and it now runs client feedback through classification, escalation, and live conversational status reporting, with almost no human triage required.**
+
+---
+
+## What It Actually Does
+
+- **Ask** — every piece of incoming feedback is read and classified: AML-Compliance, Tech-Infrastructure, or General Service
+- **Check** — category maps to business priority (AML → P1, Tech → P2, General → P3), checked against SLA time thresholds
+- **Recommend** — P1/P2 cases trigger an automatic, formatted alert to the right team, with a clear next action, seconds after the feedback lands
+- A fourth capability sits on top of the loop: an ops manager can simply **ask** the system, in plain English, *"how many P1 cases are open right now?"* — and get a real, current answer.
+
+That's the whole business case in one sentence: **feedback that classifies, escalates, and reports on itself.**
+
+---
+
+## The Build, Briefly
+
+The pipeline runs on **n8n** — classification, priority logic, and SLA-aware Gmail alerts, all logged to a single source of truth. On top of that sits **Dify**, a conversational layer that answers ops questions by calling a live n8n webhook, not a static report.
+
+That second half is worth a beat, because it's where the interesting decisions were:
+
+**I tried the obvious approach first — load classified data into Dify's knowledge base and let semantic search answer questions.** It broke immediately on the one question that mattered most: *"how many."* Semantic search finds relevant text. It doesn't count rows. For a system whose entire value is trustworthy numbers, that failure mode was disqualifying, not a tuning problem.
+
+**The fix was a live webhook instead of a static upload.** n8n computes exact counts on demand; Dify calls it fresh, every question, every time. No staleness, no approximation, ever.
+
+**And a fair challenge I got early on: if n8n can compute everything, why bring in a second tool at all?** Because orchestration and conversation are different jobs. n8n has no native multi-turn memory and no natural-language reasoning over a follow-up question like *"what about the rest of the cases?"* Dify does that one thing well, while staying completely decoupled from the business logic, which never leaves n8n. Splitting the two made each side simpler — not redundant.
+
+---
+
+## What I'd Do Differently Next Time
+
+Three honest lessons, because a build like this isn't clean the first time:
+
+1. **AI-derived fields can quietly disagree with each other**, even under structured output constraints. My classifier assigned category reliably but occasionally drifted on a separately-computed priority field. The fix: derive priority from category by business rule, don't trust an LLM to keep two related fields consistent on its own.
+2. **An append-only sheet under repeated testing duplicates fast.** A production version needs an upsert or dedup key from day one, not as cleanup after the fact.
+3. **A working URL is not a working integration.** Method mismatches between the webhook and the tool schema cost real debugging time — cross-platform contracts need to match exactly on both sides.
+
+None of these are reasons not to build this. They're the ordinary cost of building something real, and cheaper to plan for than to discover mid-build.
+
+---
+
+## Why It Matters
+
+This isn't a demonstration that a workflow tool can be clever. It's a working answer to a much smaller, much more useful question: **can a focused automation loop shrink the distance between a client's problem and someone acting on it — without a new platform, a new license, or a multi-quarter IT project?**
+
+That distance is the actual cost center. Closing it is the business case.
+
+---
+
+*Personal project, synthetic data only — no client or employer information involved. Happy to talk through the architecture with anyone building something similar.*
+
