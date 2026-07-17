@@ -17,13 +17,15 @@ That gap between *"a client raised an issue"* and *"the right person is acting o
 
 That's the whole business case in one sentence: **feedback that classifies, escalates, and reports on itself.**
 
+On the 100-row synthetic dataset this runs against, that comes out to **19 AML-Compliance (P1), 30 Tech-Infrastructure (P2), and 51 General Service (P3) cases — 49 of which trigger an automatic escalation digest.** Every one of those numbers reconciles exactly at every stage of the pipeline; nothing is estimated.
+
 ---
 
 ## The Build, Briefly
 
 The pipeline runs on **n8n** — classification, priority logic, and SLA-aware Gmail alerts, all logged to a single source of truth. On top of that sits **Dify**, a conversational layer that answers ops questions by calling a live n8n webhook, not a static report.
 
-That second half is worth a beat, because it's where the interesting decisions were:
+That second half is worth a beat, because it's where the interesting decisions were.
 
 **I tried the obvious approach first — load classified data into Dify's knowledge base and let semantic search answer questions.** It broke immediately on the one question that mattered most: *"how many."* Semantic search finds relevant text. It doesn't count rows. For a system whose entire value is trustworthy numbers, that failure mode was disqualifying, not a tuning problem.
 
@@ -35,11 +37,13 @@ That second half is worth a beat, because it's where the interesting decisions w
 
 ## What I'd Do Differently Next Time
 
-Three honest lessons, because a build like this isn't clean the first time:
+Real lessons from an actual debugging pass, because a build like this isn't clean the first time:
 
-1. **AI-derived fields can quietly disagree with each other**, even under structured output constraints. My classifier assigned category reliably but occasionally drifted on a separately-computed priority field. The fix: derive priority from category by business rule, don't trust an LLM to keep two related fields consistent on its own.
-2. **An append-only sheet under repeated testing duplicates fast.** A production version needs an upsert or dedup key from day one, not as cleanup after the fact.
+1. **AI-derived fields can quietly disagree with each other**, even under structured output constraints. My classifier assigned category reliably but occasionally drifted on a separately-computed priority field — a case tagged Tech-Infrastructure would sometimes still be marked P1. The fix: stop asking the model for priority at all. It's now derived from category by a fixed rule in a Code node — a lookup, not a request.
+2. **An append-only sheet under repeated testing duplicates fast.** What started as 100 rows became 105, then 520, across iterative test runs. The fix: switch to "Append or Update," matched on a unique `feedback_id` — re-running the workflow now updates existing rows instead of stacking new copies on top.
 3. **A working URL is not a working integration.** Method mismatches between the webhook and the tool schema cost real debugging time — cross-platform contracts need to match exactly on both sides.
+4. **LLMs paraphrase enum values even when told not to.** A schema requiring an exact string like `"Enterprise / Large Corporate"` would occasionally come back as `"Enterprise"` or `"Corporate"` — close, but not an exact match, which is enough to fail strict schema validation. The fix: loosen enums to plain strings with descriptions, and normalize the value deterministically afterward rather than hoping the model's wording is always exact.
+5. **A field the model was never shown can't be returned.** `feedback_id` disappeared downstream simply because the prompt never included it in the first place — no amount of schema tweaking fixes a field the model never saw.
 
 None of these are reasons not to build this. They're the ordinary cost of building something real, and cheaper to plan for than to discover mid-build.
 
