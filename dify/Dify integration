@@ -1,0 +1,97 @@
+# Dify Integration Guide — ACR Ops Assistant (Functional Walkthrough)
+
+This doc is the "how do I actually build this" companion to [`acr-ops-assistant-config.md`](acr-ops-assistant-config.md), which has the exact schema/prompt/code. Follow these steps in order to reproduce the ACR Ops Assistant in your own Dify workspace, assuming Workflow 2 (`ops-query-api.json`) is already deployed and its webhook URL is live.
+
+---
+
+## Step 1 — Import the n8n webhook as a Custom Tool
+
+1. In Dify, go to **Integrations → Tools → Swagger API as Tool**
+2. Click **Install** and paste in the OpenAPI/Swagger YAML from `acr-ops-assistant-config.md` (the schema pointing at your `/webhook/ops-query` endpoint)
+3. Once imported, you'll see a tool card appear named **`ops_case_data` — by Dify**
+
+   ![Swagger tool imported](../docs/screenshots/dify-swagger-tool-list.png)
+
+4. Click into that tool card — you'll see its operation, **`getOpsCaseData`**, along with the description pulled directly from your schema's `summary`/`description` fields:
+
+   > *Returns total case count and breakdown by priority (P1=AML-Compliance, P2=Tech-Infrastructure, P3=General Service), including...*
+
+   ![Tool detail panel](../docs/screenshots/dify-tool-detail.png)
+
+   This confirms the import worked and Dify correctly parsed your schema — no parameters are required since this is a simple `GET` with no query params or auth.
+
+---
+
+## Step 2 — Build the chatflow
+
+1. Create a new **Chatflow** app in Dify (not a plain "Chatbot" app — Chatflow gives you the visual node canvas needed to wire in a Custom Tool explicitly)
+2. On the canvas, you'll start with a default **START → USER INPUT** connection
+3. Add a **Tool** node right after **USER INPUT**, and select the `ops_case_data` tool you imported in Step 1. Rename this node **GETOPSCASEDATA** for clarity (this also becomes the variable reference name used in later steps)
+4. Add an **LLM** node after the tool node
+5. Add an **Answer** node after the LLM node
+
+Your finished canvas should look like this — four nodes, one straight line:
+
+```
+START → USER INPUT → GETOPSCASEDATA → LLM → ANSWER
+```
+
+---
+
+## Step 3 — Configure the LLM node
+
+1. Click into the **LLM** node
+2. Set the model to **gpt-5.5 (Chat)**
+3. In the node's context/variables section, insert `{{#getOpsCaseData.text#}}` — this pulls the raw JSON text returned by the tool call directly into the model's available context
+4. Paste in the system prompt from `acr-ops-assistant-config.md` (the block that starts *"You are an operations assistant for a commercial banking client feedback system..."*)
+5. Enable **Memory**, and set the conversation window to **10** — this lets the assistant correctly handle a follow-up question like *"what about the P2s?"* without losing the earlier context
+
+---
+
+## Step 4 — Test in Preview before publishing
+
+Use the **Preview** panel (top right of the chatflow builder) to test end-to-end before publishing anything.
+
+Ask a real question, e.g.:
+
+> *"Could you give me a summary of the escalated P1 cases?"*
+
+A correctly wired flow returns something like this — note the specific, grounded numbers (19 escalated P1 cases, correct case type, correct routing group, segment breakdown) rather than a vague or hallucinated summary:
+
+![Working preview response](../docs/screenshots/dify-preview-p1-summary.png)
+
+**What to check in this test response, specifically:**
+- The case count matches what you'd get calling the webhook directly (in this build: 19 P1 cases)
+- `Case type` is consistently reported as AML-Compliance for every P1 case — if you see priority and case type disagreeing here, that's a signal the upstream n8n classification logic has drifted (see the "Known Issues & Fixes" table in the main README)
+- The assistant cites concrete details (routing group, segment split) rather than a generic non-answer
+
+If the response comes back vague, empty, or clearly not using live data, go back and re-check Step 1 — it's almost always a method mismatch (GET vs POST) between the Dify tool schema and the n8n Webhook node, not a prompt problem.
+
+---
+
+## Step 5 — Publish
+
+1. Click **Publish** (top right)
+2. Once published, go to the app's overview page. You'll see three service cards:
+
+   ![App overview: Web App, Backend Service API, MCP Server](../docs/screenshots/dify-app-overview.png)
+
+   - **Web App** — a public, shareable chat URL (`https://udify.app/chat/...`) for anyone to use directly, no API integration needed
+   - **Backend Service API** — a REST endpoint (`https://api.dify.ai/v1`) if you want to embed this assistant inside another internal tool instead of using Dify's own chat UI
+   - **MCP Server** — left disabled in this build; only relevant if you want to expose this assistant as a tool to *other* AI agents via Model Context Protocol
+
+3. For this demo, the **Web App** URL is enough — copy it and share it directly with an ops manager to test
+
+---
+
+## Common setup mistakes to check if it doesn't work
+
+| Symptom | Likely cause |
+|---|---|
+| Tool import fails or schema shows "invalid" | YAML formatting error — validate against `acr-ops-assistant-config.md` exactly, indentation matters |
+| Assistant responds but numbers look wrong or stale | The n8n workflow's destination sheet wasn't cleaned between test runs — check `Get row(s) in sheet`'s actual item count first, independent of Dify |
+| Assistant says it can't access the data at all | Webhook and Custom Tool schema disagree on HTTP method (GET vs POST) — a URL that "works" in a browser isn't proof the integration works; check both sides explicitly |
+| Assistant answer is generic/doesn't cite real numbers | The LLM node's context variable isn't actually wired to `{{#getOpsCaseData.text#}}`, or the tool node was renamed and the reference broke |
+
+For the underlying schema, prompt text, and the exact API contract referenced throughout this guide, see [`acr-ops-assistant-config.md`](acr-ops-assistant-config.md).
+
