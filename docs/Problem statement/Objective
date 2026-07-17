@@ -1,0 +1,76 @@
+# From Feedback to Action: How I Built an AI-Powered Escalation Engine for Banking Ops
+
+## The Business Problem
+
+In commercial banking, client feedback is a leading indicator — of compliance risk, of operational friction, of churn. But most teams still triage it manually: someone reads a complaint, decides what it means, decides who should own it, and hopes it moves fast enough before the client gives up.
+
+Two things go wrong at scale:
+- **Compliance-critical issues (AML/KYC) sit in the same queue as routine service requests**, with no automatic differentiation
+- **By the time an issue is routed to the right team, the window to act before client drop-off has often already narrowed**
+
+The business question wasn't "can we build a chatbot" — it was: **can client feedback classify itself, escalate itself, and report its own status, fast enough that ops teams act before the client walks?**
+
+## The Outcome
+
+A working system where:
+- Every piece of feedback is automatically classified and prioritized within seconds of arrival
+- Compliance and infrastructure issues are routed to the right team automatically, with SLA urgency attached — before a human ever has to triage
+- An ops manager can ask "how many P1 cases are open right now" in plain English and get a real, current answer — not a stale report someone pulled last week
+
+On a 100-case synthetic dataset, the pipeline classified **19 AML-Compliance (P1), 30 Tech-Infrastructure (P2), and 51 General Service (P3) cases — 49 of which triggered an automatic escalation digest.** Every number reconciles exactly across every stage of the workflow; none of it is estimated or approximate.
+
+This isn't a feature. It's a **shift from reactive triage to proactive, self-reporting operations** — the kind of capability that directly reduces client churn and compliance exposure, which is the actual business case, not the automation itself.
+
+---
+
+## How It Works (Core Functionality First)
+
+1. **Classify** — incoming client feedback is read and categorized: AML-Compliance, Tech-Infrastructure, or General Service
+2. **Check** — each category maps to a business-defined priority (AML → P1, Tech → P2, General → P3), validated against SLA time thresholds
+3. **Recommend** — P1/P2 cases trigger an automatic, formatted alert to the responsible team with a clear recommended action; everything is logged to one live source of truth
+4. **Ask** — an ops manager can query that live data conversationally, anytime, without opening a spreadsheet
+
+That loop — classify, check, recommend, ask — is the ACR Framework. Everything else described below is implementation detail in service of that loop.
+
+---
+
+## The Stack, Briefly
+
+| Layer | Tool | Why |
+|---|---|---|
+| Classification & orchestration | **n8n** | Visual, auditable branching logic — every decision (category, priority, SLA status) is traceable |
+| Source of truth | **Google Sheets** | Lightweight, zero infrastructure cost for a proof of concept |
+| Alerting | **Gmail (via n8n)** | SLA-aware digest, no CRM/Outlook dependency required |
+| Live conversational query | **Dify**, calling an **n8n webhook** as a tool | Natural-language access to always-current data |
+
+**Why a webhook, not a static upload to Dify:** early on, I loaded classified data into Dify's knowledge base and let it answer questions via semantic search. It failed at the one thing that mattered most — counting. Semantic retrieval finds *relevant* text, it doesn't *count* rows. For a system whose whole value is trustworthy numbers, that's disqualifying. The fix: n8n exposes a live webhook that computes exact counts on demand, and Dify calls it fresh every time a question is asked. No stale data, no approximation.
+
+**Why Dify at all, if n8n could compute everything:** n8n orchestrates; it doesn't converse. It has no native multi-turn memory, no natural-language reasoning over follow-up questions, no reformatting raw data into something a person reads comfortably. Rather than building a chat layer from scratch inside a workflow tool, Dify does that one job well — while staying cleanly decoupled from the business logic itself, which continues to live entirely in n8n. **Orchestration and conversation are different problems; this uses the right tool for each, rather than forcing one tool to do both.**
+
+---
+
+## What Worked
+
+- **A single, deterministic priority rule beat AI judgment.** Priority isn't asked of the model at all — it's derived from category by a fixed rule in code, after an early version showed an AI-derived priority field could quietly disagree with its own category even under schema constraints. Removing the model from that decision removed the bug class entirely.
+- **SLA-awareness turned classification into urgency.** Cases aren't just labeled — they're flagged against real time thresholds, which is what actually drives ops behavior, not the label itself.
+- **Separating "who computes" from "who converses"** made both halves simpler and easier to change independently.
+
+## What I'd Flag as Risks / Lessons for Anyone Building This
+
+- **AI-derived fields can silently disagree with each other**, even under schema constraints — validate downstream, don't assume consistency across correlated outputs
+- **Iterative testing on a live append-only sheet caused real data duplication** (100 rows became 105, then 520, across repeated test runs) — a production build needs an upsert/dedup strategy (matched on a unique ID) from day one, not as an afterthought
+- **Cross-platform tool integration needs explicit, matching contracts** (method, schema) on both sides — a working URL isn't the same as a working integration
+- **LLMs paraphrase strict enum values even when instructed not to** — a schema expecting an exact string will occasionally get a shortened, close-but-wrong version back; normalize downstream rather than relying on exact model wording
+
+None of these are reasons not to build this pattern — they're the standard cost of building anything real, and worth planning for upfront rather than discovering mid-build.
+
+---
+
+## Why This Matters for Product Owners
+
+This isn't about proving a workflow tool can be clever. It's a working demonstration that **a small, focused automation loop — classify, check, recommend, ask — can measurably shrink the gap between "client raises an issue" and "the right person acts on it,"** without new headcount, new licenses, or a multi-quarter IT project. That gap is where compliance risk and client churn actually live. Closing it is the business case.
+
+---
+
+*Personal project — synthetic data, no client or employer information involved. Open to feedback and discussion.*
+
