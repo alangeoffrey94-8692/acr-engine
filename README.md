@@ -1,17 +1,19 @@
 # ACR Framework — Ask, Check, Recommend
 
-An AI-powered escalation engine for commercial banking client feedback. Built with **n8n** (classification, orchestration, SLA-aware alerting) and **Dify** (conversational query layer via live tool-calling into a n8n webhook).
+An AI-powered escalation engine for commercial banking client feedback. Built with **n8n** (classification, orchestration, SLA-aware alerting) and **Dify** (conversational query layer via live tool-calling into an n8n webhook).
 
 > Personal demo project. All sample data is synthetic — no client or employer data involved.
 
 📄 Full write-up: [`docs/ACR_Framework_Article_Final.md`](docs/ACR_Framework_Article_Final.md)
+🤖 Dify setup (step-by-step): [`dify/DIFY_INTEGRATION_GUIDE.md`](dify/DIFY_INTEGRATION_GUIDE.md)
+🔧 Dify technical reference (schema, prompt, API): [`dify/acr-ops-assistant-config.md`](dify/acr-ops-assistant-config.md)
 
 ---
 
 ## Architecture
 
 ```
-Google Sheets (raw feedback, 105-row synthetic dataset)
+Google Sheets (raw feedback, 100-row synthetic dataset)
         │
         ▼
 ┌────────────────────────────────────────────────────────────┐
@@ -23,34 +25,39 @@ Google Sheets (raw feedback, 105-row synthetic dataset)
 │                              ▼                                │
 │                        AI Agent (classify)                    │
 │                     [Model: OpenAI Chat + Structured           │
-│                      Output Parser — enforces category enum]  │
+│                      Output Parser — category + segment,      │
+│                      feedback_id passed through verbatim]     │
+│                              │                                │
+│                              ▼                                │
+│                    Code: normalize segment/category,          │
+│                    derive priority strictly from category     │
+│                    (AML-Compliance→P1, Tech-Infra→P2, else P3)│
 │                              │                                │
 │                              ▼                                │
 │                    If (category = AML-Compliance)             │
-│                    ├─ True ──► Code: tag priority=P1           │
-│                    └─ False ─► If1 (category = Tech-Infra)     │
-│                                 ├─ True ──► Code1: priority=P2  │
-│                                 └─ False ─► Code2: priority=P3  │
+│                    ├─ True (19) ──► Code: tag P1               │
+│                    └─ False (81) ─► If1 (category=Tech-Infra)   │
+│                                 ├─ True (30) ──► Code1: P2      │
+│                                 └─ False (51) ─► Code2: P3      │
 │                              │                                │
 │                              ▼                                │
 │                           Merge (3 inputs → 1)                │
 │                              │                                │
 │                              ▼                                │
-│                    Append row in sheet                        │
-│                    (single source of truth — all 105 rows,    │
-│                     mapped fields: case_type, priority,       │
-│                     entity, segment, summary,                 │
-│                     ai_remediation_summary, status)            │
+│                    Append or Update row in sheet               │
+│                    (matched on feedback_id — prevents          │
+│                     re-run duplication; single source          │
+│                     of truth, all 100 rows)                    │
 │                              │                                │
 │                              ▼                                │
 │                    If2 (priority != P3)                        │
-│                    ├─ True (59) ──► Code: build SLA-tagged     │
+│                    ├─ True (49) ──► Code: build SLA-tagged     │
 │                    │                HTML digest                │
 │                    │                    │                     │
 │                    │                    ▼                     │
 │                    │              Gmail: Send digest           │
 │                    │              (grouped P1/P2, SLA labels)  │
-│                    └─ False (46) ─► No Operation (logged only) │
+│                    └─ False (51) ─► No Operation (logged only) │
 └────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────┐
@@ -70,7 +77,7 @@ Google Sheets (raw feedback, 105-row synthetic dataset)
 │  Respond to Webhook (returns JSON)                              │
 └────────────────────────────────────────────────────────────┘
         │
-        ▼
+        ▼  (Dify calls this endpoint as a Custom Tool, on demand)
 ┌────────────────────────────────────────────────────────────┐
 │  Dify Chatflow: ACR Ops Assistant                              │
 │                                                                │
@@ -94,6 +101,21 @@ Google Sheets (raw feedback, 105-row synthetic dataset)
 
 ---
 
+## Live Result
+
+Running the classification pipeline against the 100-row synthetic dataset produces:
+
+| Category | Count | Priority |
+|---|---|---|
+| AML-Compliance | 19 | P1 |
+| Tech-Infrastructure | 30 | P2 |
+| General Service | 51 | P3 |
+| **Total** | **100** | — |
+
+**49 cases (P1 + P2) trigger the automated escalation digest.** The math reconciles exactly at every branch of the workflow — no items lost, no items duplicated.
+
+---
+
 ## Workflow 1: Classification & Alerting Pipeline
 
 **File:** `n8n-workflows/acr-classification-pipeline.json`
@@ -105,11 +127,12 @@ Google Sheets (raw feedback, 105-row synthetic dataset)
 | Manual Trigger | `When clicking 'Execute workflow'` | Demo/on-demand execution |
 | Schedule Trigger *(deactivated)* | Schedule (30 min interval) | Documented production cadence — inactive in this repo's demo state |
 | Get row(s) in sheet | Google Sheets → Get Row(s) | Reads raw feedback (`Feedback_ID`, `User_Segment`, `Source_Channel`, `Raw_Text`) |
-| AI Agent | AI Agent + OpenAI Chat Model + Structured Output Parser | Classifies each row into `category`, generates `priority`, `issue_summary`, `recommended_action` |
-| If / If1 | If | Branches on `category`: AML-Compliance → true; else check Tech-Infrastructure |
-| Code / Code in JavaScript1 / Code in JavaScript2 | Code (JS) | Tags `priority` (P1/P2/P3) and normalizes each branch into a consistent flat `output` object |
-| Merge | Merge (3 inputs) | Recombines all three branches into one stream (105 items) |
-| Append row in sheet | Google Sheets → Append Row | Writes every case to the single source-of-truth sheet |
+| AI Agent | AI Agent + OpenAI Chat Model + Structured Output Parser | Classifies each row into `category`, passes `feedback_id` through verbatim, generates `issue_summary`, `recommended_action` |
+| Code (normalize) | Code (JS) | Normalizes any near-match `segment`/`category` values the model returns (e.g. "Corporate" → "Enterprise / Large Corporate"), derives `priority` strictly from `category` by rule — never trusted from the model directly |
+| If / If1 | If | Branches on normalized `category`: AML-Compliance → true; else check Tech-Infrastructure |
+| Code in JavaScript / 1 / 2 | Code (JS) | Tags each branch into a consistent flat `output` object |
+| Merge | Merge (3 inputs) | Recombines all three branches into one stream (100 items) |
+| Append or Update row in sheet | Google Sheets → Append or Update Row | Writes every case to the single source-of-truth sheet, matched on `feedback_id` — re-running the workflow updates existing rows instead of duplicating them |
 | If2 | If | Filters `priority != P3` → routes P1/P2 to alerting, P3 to no-op |
 | Code in JavaScript3 | Code (JS) | Builds the SLA-tagged, category-grouped HTML email body |
 | Send a message | Gmail | Sends the digest email |
@@ -132,7 +155,23 @@ const p1 = rows.filter(d => (d.case_type || '').trim() === 'AML-Compliance');
 const p2 = rows.filter(d => (d.case_type || '').trim() === 'Tech-Infrastructure');
 ```
 
-> **Important:** priority grouping for the digest is done on `case_type`, not the AI Agent's own `priority` field. See [Known Limitations](#known-limitations) — the two fields can drift.
+### Key logic: deterministic priority (Code node, excerpt)
+
+```javascript
+function normalizeCategory(val) {
+  const v = (val || '').toLowerCase();
+  if (v.includes('aml') || v.includes('compliance')) return 'AML-Compliance';
+  if (v.includes('tech') || v.includes('infra')) return 'Tech-Infrastructure';
+  return 'General Service';
+}
+
+const category = normalizeCategory(item.category);
+const priority = category === 'AML-Compliance' ? 'P1'
+              : category === 'Tech-Infrastructure' ? 'P2'
+              : 'P3';
+```
+
+> Priority is never asked of the model as an independent field. It's computed once, deterministically, from `category` — this removed a recurring class of bug where an AI-derived priority field silently disagreed with its own category. See [Known Issues & Fixes](#known-issues--fixes).
 
 ---
 
@@ -147,10 +186,10 @@ No authentication. Must be **Published/Active** for the production URL to respon
 
 ```json
 {
-  "total": 105,
-  "p1_count": 20,
-  "p2_count": 39,
-  "p3_count": 46,
+  "total": 100,
+  "p1_count": 19,
+  "p2_count": 30,
+  "p3_count": 51,
   "p1_cases": [ { "case_type": "...", "priority": "...", "entity": "...", "segment": "...", "summary": "...", "ai_remediation_summary": "..." }, ... ],
   "p2_cases": [ ... ],
   "p3_cases": [ ... ]
@@ -179,68 +218,18 @@ return [{
 }];
 ```
 
-**Why a webhook and not a direct Sheets-to-Dify integration:** this endpoint is the single place all business logic (category-to-priority mapping, filtering) lives. Dify never re-implements that logic — it just calls the endpoint and gets a pre-computed, correct answer. If business rules change, only this Code node needs updating.
+**Why a webhook and not a direct Sheets-to-Dify integration:** this endpoint is the single place all business logic (category-to-priority mapping, filtering) lives. Dify never re-implements that logic — it just calls the endpoint and gets a pre-computed, correct answer. If business rules change, only this Code node needs updating. See [`dify/acr-ops-assistant-config.md`](dify/acr-ops-assistant-config.md) for exactly how Dify calls this endpoint and why Dify sits on top of it rather than n8n serving the chat layer itself.
 
 ---
 
 ## Dify Chatflow: ACR Ops Assistant
 
-**File:** `dify/acr-ops-assistant-config.md`
+Full setup steps and technical reference have been split into two dedicated docs, since one audience wants to *replicate the integration* and the other wants the *exact schema/prompt/code*:
 
-### Flow
-`START → USER INPUT → ops_case_data (Custom Tool) → LLM → ANSWER`
+- **[`dify/DIFY_INTEGRATION_GUIDE.md`](dify/DIFY_INTEGRATION_GUIDE.md)** — functional, click-by-click walkthrough of building this in the Dify UI (Swagger tool import, chatflow wiring, publishing, testing)
+- **[`dify/acr-ops-assistant-config.md`](dify/acr-ops-assistant-config.md)** — the OpenAPI/Swagger schema, LLM configuration, system prompt, and the exact call/response contract between Dify and the n8n webhook
 
-### Custom Tool schema (Swagger/OpenAPI, added via Integrations → Tools → Swagger API as Tool)
-
-```yaml
-openapi: 3.0.0
-info:
-  title: Ops Case Data API
-  version: 1.0.0
-servers:
-  - url: https://<your-instance>.app.n8n.cloud
-paths:
-  /webhook/ops-query:
-    get:
-      operationId: getOpsCaseData
-      summary: Get live case counts and details for P1, P2, and P3 client feedback cases
-      description: Returns total case count and breakdown by priority (P1=AML-Compliance, P2=Tech-Infrastructure, P3=General Service), including entity, segment, summary, and recommended action for each case.
-      responses:
-        '200':
-          description: Successful response with case data
-          content:
-            application/json:
-              schema:
-                type: object
-```
-Authorization method: **None**.
-
-### LLM node configuration
-- **Model:** gpt-5.5 (Chat)
-- **Context:** `{{#getOpsCaseData.text#}}` — the raw JSON string returned by the tool call, injected directly into the system prompt
-- **Memory:** built-in, window size 10 (multi-turn conversation support)
-
-### System prompt
-
-```
-You are an operations assistant for a commercial banking client feedback system.
-
-You have access to live, real-time case data provided below:
-{{#context#}}
-
-The data includes fields: case_type, priority, entity, segment, summary, ai_remediation_summary.
-
-Answer questions about case counts, priorities, SLA status, and specific cases
-based only on this data. If asked something not answerable from the data,
-say so clearly rather than guessing.
-
-When asked about case counts, priorities, or specific case details, always
-call the "ops_case_data" tool to fetch current live data rather than guessing.
-Use the exact numbers and details returned by the tool in your answer.
-```
-
-### Why Dify over extending n8n's own chat capability
-n8n has no native multi-turn conversational memory or natural-language reasoning over follow-up questions. Rather than building that from scratch in a workflow tool, Dify owns the conversational layer exclusively, while all computation and business logic stays in n8n (Workflow 2). This keeps the two systems decoupled — Dify's tool contract only needs the response shape above to stay stable; it never needs to know *how* the counts were computed.
+**Quick summary:** `START → USER INPUT → ops_case_data (Custom Tool, GET) → LLM (gpt-5.5) → ANSWER`. The Custom Tool calls the n8n webhook above on every user question; nothing is cached or pre-loaded, so answers are always grounded in current sheet data.
 
 ---
 
@@ -252,29 +241,42 @@ n8n has no native multi-turn conversational memory or natural-language reasoning
 ├── docs/
 │   ├── ACR_Framework_Article_Final.md     ← full write-up (business-first framing)
 │   ├── ACR_Framework_ShortPost.md         ← condensed LinkedIn post
+│   ├── ACR_Framework_LinkedIn_Writeup_v2.md ← alternate long-form framing
 │   └── screenshots/                       ← build + demo screenshots
 ├── n8n-workflows/
 │   ├── acr-classification-pipeline.json   ← exported Workflow 1
 │   └── ops-query-api.json                 ← exported Workflow 2 (webhook)
 ├── dify/
-│   └── acr-ops-assistant-config.md        ← system prompt + tool schema (above)
+│   ├── DIFY_INTEGRATION_GUIDE.md          ← functional setup steps
+│   └── acr-ops-assistant-config.md        ← technical reference (schema, prompt, API)
 └── sample-data/
-    └── sample-feedback.csv                ← synthetic input dataset
+    └── sample-feedback.csv                ← synthetic input dataset (100 rows)
 ```
 
 **To export the n8n workflows:** open each workflow → workflow menu (`...`) → **Download** → save the `.json` file into `n8n-workflows/`.
 
 ---
 
-## Known Limitations
+## Known Issues & Fixes
 
-- **Priority drift:** the AI Agent's own `priority` field can diverge from `category` even under structured output constraints (e.g., an AML-Compliance case occasionally tagged P2 instead of P1). All downstream logic (digest grouping, Ops Query API) filters on **`case_type`**, not `priority`, to route around this. The underlying classifier prompt would need further constraint-tuning to fully resolve at the source.
-- **Simulated SLA timestamps:** the source dataset has no real ingestion timestamp; `simulated_age_hours` is randomly generated for demo purposes. A production version would use a real `created_at` field.
-- **Append-only writes:** Workflow 1 uses pure append, which caused significant row duplication during iterative testing (recovered via manual dedupe on `case_type`+`summary`). Production use should implement an upsert/update pattern or a dedup key (e.g., `Feedback_ID`) per run.
-- **No webhook authentication:** the Ops Query API endpoint (Workflow 2) has no auth — acceptable for a local demo, not for any real deployment. Add header-based auth in the n8n Webhook node and matching auth config in the Dify Custom Tool before exposing publicly.
+Documented here deliberately — these were real bugs hit during the build, and how each was actually resolved, not just described:
+
+| Issue | Root cause | Fix |
+|---|---|---|
+| **Item count inflated (100 → 105+)** | Retry-on-failure and repeated manual test runs appended duplicate rows to an append-only sheet | Switched "Append row in sheet" to **Append or Update**, matched on `feedback_id` |
+| **Priority drift** (category said Tech-Infrastructure, priority said P1) | AI Agent was asked to independently generate `priority` alongside `category` — the two could disagree even under schema constraints | Removed `priority` from the model's output entirely; it's now computed deterministically from `category` in a Code node |
+| **Enum mismatch failures** (`"segment": "Enterprise"` instead of the full string) | Model returned a shortened, close-but-not-exact value against a strict JSON Schema enum | Loosened `segment`/`category` to plain strings with descriptions; added a normalization step in the Code node instead of relying on exact model wording |
+| **`feedback_id` missing downstream** | The AI Agent's prompt only sent `Raw_Text` to the model — `Feedback_ID` was never in scope to be returned | Prompt now sends `Feedback_ID` explicitly; schema requires `feedback_id` in the output; system message instructs the model to copy it unchanged |
+| **Broken `If` branch (100% landing in False)** | An `If` node still referenced `$json.output.category`, a path that no longer existed after an earlier flattening step | Corrected the field reference to `$json.category` |
+| **Digest email lost its P1/P2 table** | "Append or Update row in sheet" had its field mappings (`case_type`, `entity`, `segment`, etc.) left blank, so the sheet stored empty values | Mapped each field to its actual upstream expression (e.g. `case_type` → `{{ $json.category }}`) |
+
+**Simulated SLA timestamps:** the source dataset has no real ingestion timestamp; `simulated_age_hours` is randomly generated for demo purposes. A production version would use a real `created_at` field.
+
+**No webhook authentication:** the Ops Query API endpoint (Workflow 2) has no auth — acceptable for a local demo, not for any real deployment. Add header-based auth in the n8n Webhook node and matching auth config in the Dify Custom Tool before exposing publicly.
 
 ---
 
 ## License
 
 Personal / educational use. No proprietary or client data included.
+
